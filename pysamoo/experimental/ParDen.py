@@ -23,94 +23,25 @@ from pysamoo.core.algorithm import SurrogateAssistedAlgorithm
 # =========================================================================================================
 # Display
 # =========================================================================================================
-from pysamoo.core.knockout import noisy
+from pymoo.util.display import MultiObjectiveDisplay 
 
+class ParDenDisplay(MultiObjectiveDisplay):
 
-class ParDenDisplay(Display):
+    def _do(self, problem, evaluator, algorithm):
+        super()._do(problem, evaluator, algorithm)
+        opt = algorithm.opt.get("F")
 
-    def __init__(self, display, **kwargs):
-        super().__init__(**kwargs)
-        self.display = display
-
-    def _do(self, problem, evaluator, gpasf):
-        self.display.do(problem, evaluator, gpasf.algorithm, show=False)
-        self.output = self.display.output
-
-        if gpasf.n_gen > 1:
-            surr_infills = Population.create(*gpasf.infills.get("created_by"))
+        if algorithm.n_gen > 1:
+            surr_infills = Population.create(*algorithm.infills.get("created_by"))
             n_influenced = sum(surr_infills.get("type") == "trace")
             self.output.append("n_influenced", f"{n_influenced}/{len(surr_infills)}")
         else:
             self.output.append("n_influenced", "-")
+        
+        self.output.append("nds_score", algorithm.ndscore)
+        # self.output.append("mae", algorithm.mae)
+        self.output.append("n_front", len(opt))
 
-        if problem.n_obj == 1 and problem.n_constr == 0:
-            if len(gpasf.surrogate.targets) >= 1:
-                target = gpasf.surrogate.targets[0]
-                self.output.append("mae", target.performance("mae"))
-                self.output.append("model", target.best)
-
-        elif problem.n_obj == 2 and problem.n_constr == 0:
-            if len(gpasf.surrogate.targets) >= 2:
-                perf = gpasf.surrogate.performance("mae")
-                if ("F", 0) in perf:
-                    self.output.append("mae f1", perf[("F", 0)])
-                if ("F", 1) in perf:
-                    self.output.append("mae f2", perf[("F", 1)])
-
-
-# =========================================================================================================
-# Animation
-# =========================================================================================================
-
-class ParDenAnimation(AnimationCallback):
-
-    def __init__(self,
-                 nth_gen=1,
-                 n_samples_for_surface=200,
-                 dpi=200,
-                 **kwargs):
-
-        super().__init__(nth_gen=nth_gen, dpi=dpi, **kwargs)
-        self.n_samples_for_surface = n_samples_for_surface
-        self.last_pop = None
-
-    def do(self, problem, algorithm):
-
-        if problem.n_var != 2 or problem.n_obj != 1:
-            raise Exception(
-                "This visualization can only be used for problems with two variables and one objective!")
-
-        # draw the problem surface
-        doe = algorithm.surrogate.targets["F"].doe
-        if doe is not None:
-            problem = algorithm.surrogate
-
-        plot = FitnessLandscape(problem, _type="contour", kwargs_contour=dict(alpha=0.5))
-        plot.do()
-
-        if doe is not None:
-            plt.scatter(doe.get("X")[:, 0], doe.get("X")[:, 1], color="black", alpha=0.3)
-
-        for k, sols in enumerate(algorithm.trace_assigned):
-            if len(sols) > 0:
-                pop = Population.create(*sols)
-                plt.scatter(pop.get("X")[:, 0], pop.get("X")[:, 1], color="blue", alpha=0.3)
-
-                x = algorithm.influenced[k].X
-                for sol in sols:
-                    plt.plot((x[0], sol.X[0]), (x[1], sol.X[1]), alpha=0.1, color="black")
-
-        plt.scatter(algorithm.influenced.get("X")[:, 0], algorithm.influenced.get("X")[:, 1], color="red", marker="*",
-                    alpha=0.7,
-                    label="influenced")
-
-        _biased = Population.create(
-            *[e for e in algorithm.biased if e is not None])
-        plt.scatter(_biased.get("X")[:, 0], _biased.get("X")[:, 1], color="orange", marker="s", label="Selected",
-                    alpha=0.8,
-                    s=100)
-
-        plt.legend()
 
 
 # =========================================================================================================
@@ -120,15 +51,18 @@ from sklearn import metrics
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import cross_val_score
 
+from scipy.stats import kendalltau, spearmanr
+
+from pymoo.optimize import minimize
 from pymoo.core.problem import Problem
 from pymoo.core.evaluator import set_cv
 from pymoo.util.termination.no_termination import NoTermination
 from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
+from pymoo.util.termination.x_tol import DesignSpaceToleranceTermination
 
 import logging
 
 def nds_score(estimator, X, y_grd):
-    logging.debug(estimator, X, y_grd)
     nds_sorter = NonDominatedSorting()
     y_est = estimator.predict(X)
     _, y_nds_est = nds_sorter.do(y_est,
@@ -136,69 +70,67 @@ def nds_score(estimator, X, y_grd):
                                  return_rank=True)
     _, y_nds_grd = nds_sorter.do(y_grd,
                                  only_non_dominated_front=False,
-                                 return_rank=True)
-    logging.debug(y_nds_est, y_nds_grd)
-    return metrics.accuracy_score(y_nds_grd, y_nds_est)
+                                 return_rank=True)    
+    # return 1.0 - np.mean(np.abs(y_nds_grd - y_nds_est)/np.max((1.0,np.max(y_nds_est),np.max(y_nds_est))))
+    # return metrics.accuracy_score(y_nds_grd, y_nds_est)
+    tau, p_value = kendalltau(y_nds_grd, y_nds_est)
+    # rho, p_value = spearmanr(y_nds_grd, y_nds_est)
+    return max(0.0, tau*(1.0-p_value))
+
+
+class SurrogateToProblem(Problem):
+
+    def __init__(self, problem, surrogate):
+        super().__init__(n_var=problem.n_var,
+                         n_obj=problem.n_obj,
+                         n_constr=problem.n_constr,
+                         xl=problem.xl,
+                         xu=problem.xu)
+        self.surrogate = surrogate
+        self.problem = problem
+
+    def _evaluate(self, x, out, *args, **kwargs):        
+        out["F"] = self.surrogate.predict(x)
 
 
 class ParDen(SurrogateAssistedAlgorithm):
 
     def __init__(self,
                  algorithm,
-                 skip_already_evaluated=True,
+                 twopoint0=True,
+                 beta=50,        
                  surrogate=RandomForestRegressor(),
                  n_max_infills=np.inf,
                  **kwargs):
-
+        
         SurrogateAssistedAlgorithm.__init__(self, **kwargs)
-
+        
         self.proto = deepcopy(algorithm)
         self.algorithm = None
+        self.beta = beta
+        self.twopoint0 = twopoint0
 
-        # the control parameters for the surrogate assistance
-        self.isfitted = False        
-        self.nds_sorter = NonDominatedSorting()
-        self.opt = None
-        self.ndscore = 0.0
+        # the control parameters for the surrogate assistance        
+        self.nds_sorter = NonDominatedSorting()        
 
         # the maximum number of infill solutions
         self.n_max_infills = n_max_infills
         
+        self.surrogate = surrogate
 
     def _setup(self, problem, **kwargs):
         super()._setup(problem, **kwargs)
 
-        # set the default termination to the proto type
-        self.proto.termination = NoTermination()
+        # setup the surrogate as a problem for future use as a beta
+        self.surrogateproblem = SurrogateToProblem(problem, self.surrogate)
 
-        # setup the underlying algorithm with no problem
-        self.proto.setup(Problem(), seed=self.seed, **kwargs)
-
-        # copy the algorithm object to get started
         self.algorithm = deepcopy(self.proto)
+        self.algorithm.setup(problem, 
+                             seed=self.seed, 
+                             termination=NoTermination())
 
         # customize the display to show the surrogate influence
-        self.display = ParDenDisplay(self.algorithm.display)
-
-    def _evalpop(self, pop, nds, problem):
-        P = pop.get("X")        
-        pop[nds].set("estimated", False)
-        F = pop[nds].get("F")
-        more_truth = np.atleast_2d(np.c_[F, P[nds]])
-        if self.ground_truth is None:
-            self.ground_truth = more_truth
-        else:
-            self.ground_truth = np.concatenate((self.ground_truth, more_truth))
-        if self.isfitted:
-            self.estimates[nds] = np.inf
-        val = pop[nds]
-        # can remove all of this if we pass the algorithm in to keep track of the opt
-        if self.opt is not None:
-            val = Population.merge(val, self.opt)
-        self.opt = filter_optimum(val, least_infeasible=True)
-        logging.debug("Surrogate: opt")
-        logging.debug(self.opt.get("F"))
-
+        self.display = ParDenDisplay()
 
     def _initialize_advance(self, infills=None, **kwargs):
         super()._initialize_advance(infills=infills, **kwargs)
@@ -206,83 +138,123 @@ class ParDen(SurrogateAssistedAlgorithm):
         if self.advance_after_initial_infill:
             self.pop = self.survival.do(self.problem, infills, n_survive=len(infills))
 
-
     def _infill(self):
-        # this would be the default behavior of the algorithm        
-        # Generate new candidates */
-        candidates = self.algorithm.infill()
-        pop_size = candidates.shape[0]
+        # Doing a lookhead 
+        if self.beta > 0:
+            algorithm = deepcopy(self.algorithm)
+            algorithm.problem = self.surrogateproblem
+            # algorithm.termination = DesignSpaceToleranceTermination(tol=0.01)
+            # catch the pototype up to the main algorithm            
+            # algorithm.advance(self.algorithm.opt)
+            # do beta loops
+            for _ in range(self.beta):
+                if np.random.rand() < self.ndscore:            
+            # while algorithm.has_next():
+                    algorithm.next()
+                           
+            candidates = algorithm.infill()
+        else:
+            # this would be the default behavior of the algorithm        
+            # Generate new candidates */        
+            # get the infill solutions
+            candidates = self.algorithm.infill()
+        
         X_c = candidates.get("X")
 
-        # Estimate candidates’ fitness with surrogate */
+        # Estimate candidates’ fitness with surrogate */        
         candidates.set("estimated", True)
+        pop_size = candidates.shape[0]
         Y_c = self.surrogate.predict(X_c)
 
         # Join candidates to non-dominated set */
         opt = self.opt.get("F")
-        P_c = np.r_[self.estimates, opt]
+        P_c = np.r_[Y_c, opt]
 
         # Pretenders are non-dominated candidates */
         # get positons of the non-dominated set in P_c
         front = self.nds_sorter.do(P_c, only_non_dominated_front=True)        
         if front.min() < pop_size:       
             #positions of non-dominated candidates only
-            nds = front[(front < pop_size)]            
+            nds = front[(front < pop_size)]
         else:
-            nds = None        
-
-        # Acceptance sampling with NDScore as threshold to add additional pretenders */
-        extra = np.arange(0, pop_size)
-        extra = extra[~np.isin(extra, nds)]
-        if len(extra) > 0:
-            randoms = extra[(np.random.random(extra.shape[0]) > self.ndscore)]
-            
-            if len(randoms) > 0:
-                extra = extra[~np.isin(extra, randoms)]
-            
-        pretenders = candidates[np.r_[nds,randoms]]
-        pretenders.set("estimated", False)
-        candidates[extra].set("F", self.estimates[extra])
-            
+            nds = np.arange(0)
+        
+        if self.twopoint0:
+            pretenders = candidates[np.r_[nds]]
+            candidates = self.algorithm.infill()
+            pretenders = Population.merge(pretenders, candidates[len(pretenders):])
+        else:
+            # Acceptance sampling with NDScore as threshold to add additional pretenders */    
+            # get positons of the dominated candidates
+            extra = np.arange(0, pop_size)
+            extra = extra[~np.isin(extra, nds)]
+            if len(extra) > 0:
+                #importance sampling 
+                randoms = extra[(np.random.random(extra.shape[0]) > self.ndscore)]            
+                if len(randoms) > 0:
+                    extra = extra[~np.isin(extra, randoms)]
+            else:
+                randoms = np.arange(0)
+            pretenders = candidates[np.r_[nds,randoms]]
+        
+        infills = pretenders
+        infills.set("type", "trace")        
+        
+        #All the extras to be past to the SAlgo        
+        # self.validation = candidates[extra] 
+        # self.validation.set("F", Y_c[extra])
+        # set_cv(self.validation)
 
         # Actual pretenders’ fitness */
+        #Done in the next step of the outer algorithm
+        ret = infills.copy(deep=True)
+        ret.set("X", infills.get("X"), "created_by", infills)
+        return ret
 
-        # Add to ground-truth */
-
-        # Update non-dominated set */
-
-        # Update non-dominated score */
-
-        # Train new surrogate on ground-truth with loss L */
-
-        # validate the current model
-        self.surrogate.validate(trn=self.doe, tst=infills)
-
-        # make a step in the main algorithm with high-fidelity solutions
+    def _all_advance(self, infills=None, **kwargs):
+        infills.set("estimated", False)
+        # Update the sampler M        
+        # self.algorithm.advance(infills=Population.merge(self.validation, infills), **kwargs)
         self.algorithm.advance(infills=infills, **kwargs)
 
+        # Update non-dominated score */
+        X = self.archive.get("X")
+        y = self.archive.get("F")        
+        self.ndscores = cross_val_score(self.surrogate,
+                                        X,
+                                        y,
+                                        cv=np.minimum(5, y.shape[0]),
+                                        scoring=nds_score,
+                                        n_jobs=-1)
+        # self.maes = cross_val_score(self.surrogate,
+        #                                 X,
+        #                                 y,
+        #                                 cv=np.minimum(5, y.shape[0]),
+        #                                 scoring=metrics.make_scorer(metrics.mean_absolute_error),
+        #                                 n_jobs=-1)
+        self.ndscore = np.mean(self.ndscores)
+        # self.mae = np.mean(self.maes)
+        
+        # Train new surrogate on ground-truth with loss L */
+        # here we update our surrogate model
+        self.surrogate.fit(X, y)
+        
+        # Update non-dominated set */
+        #Done in next step of the outer algorithm
+        self.pop = infills
 
-        # now by default the infills are the surrogate-influenced solutions
-        infills = influenced
-        infills.set("type", "influenced")
+    def _initialize_advance(self, infills=None, **kwargs):
+        # Add to ground-truth */
+        super()._initialize_advance(infills=infills, **kwargs)
+        self._all_advance(infills=infills)
 
-        # now copy over the infills and set them to have never been evaluated
-        ret = infills.copy(deep=True)
-        for e in ret:
-            e.reset(data=False)
-        ret.set("X", infills.get("X"), "created_by", infills)
-
-        return ret    
-
-    def _advance(self, infills=None, **kwargs):                
-        # merge the offsprings with the current population
-
-        # execute the survival to find the fittest solutions
-
+    def _advance(self, infills=None, **kwargs):
+        # Add to ground-truth */
         super()._advance(infills=infills, **kwargs)
+        self._all_advance(infills=infills)
 
     def _set_optimum(self):
-        sols = self.algorithm.opt
+        sols = self.pop
         if self.opt is not None:
             sols = Population.merge(sols, self.opt)
         self.opt = filter_optimum(sols, least_infeasible=True)

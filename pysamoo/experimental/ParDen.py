@@ -91,7 +91,8 @@ class ParDen(SurrogateAssistedAlgorithm):
                  nondominated_ranks=1,                 
                  look_ahead=False,
                  surrogate=RandomForestRegressor(),
-                 n_max_infills=np.inf,
+                 n_max_infills=np.inf,    
+                 tol=0.0001,             
                  **kwargs):
         
         SurrogateAssistedAlgorithm.__init__(self, **kwargs)
@@ -101,6 +102,8 @@ class ParDen(SurrogateAssistedAlgorithm):
         self.look_ahead = look_ahead        
         self.twopoint0 = twopoint0
         self.ndrs = nondominated_ranks
+
+        self.tol = tol
 
         # the control parameters for the surrogate assistance        
         self.nds_sorter = NonDominatedSorting()        
@@ -131,7 +134,7 @@ class ParDen(SurrogateAssistedAlgorithm):
         # Doing a look ahead
         algorithm = deepcopy(self.algorithm)
         algorithm.problem = self.surrogateproblem
-        algorithm.termination = MultiObjectiveSpaceToleranceTermination(tol=0.00001,
+        algorithm.termination = MultiObjectiveSpaceToleranceTermination(tol=self.tol,
                                                       n_last=1,
                                                       nth_gen=1,
                                                       n_max_gen=None,

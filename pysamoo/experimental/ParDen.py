@@ -99,8 +99,6 @@ class ParDen(SurrogateAssistedAlgorithm):
         self.twopoint0 = maxfill    
         self.terminator =terminator
 
-        self.tol = tol
-
         # the control parameters for the surrogate assistance        
         self.nds_sorter = NonDominatedSorting()        
 

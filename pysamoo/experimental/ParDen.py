@@ -97,7 +97,7 @@ class ParDen(SurrogateAssistedAlgorithm):
         self.algorithm = None
         self.look_ahead = look_ahead        
         self.twopoint0 = maxfill    
-        self.terminator =terminator            
+        self.terminator =terminator
 
         self.tol = tol
 
@@ -244,9 +244,3 @@ class ParDen(SurrogateAssistedAlgorithm):
         if self.opt is not None:
             sols = Population.merge(sols, self.opt)                    
         self.opt = filter_optimum(sols, least_infeasible=True)
-                  
-        
-            
-        
-        
-

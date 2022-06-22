@@ -19,17 +19,10 @@ class ParDenDisplay(MultiObjectiveDisplay):
         super()._do(problem, evaluator, algorithm)
         opt = algorithm.opt.get("F")
 
-        # if algorithm.n_gen > 1:
-        #     surr_infills = Population.create(*algorithm.infills.get("created_by"))
-        #     n_influenced = sum(surr_infills.get("type") == "trace")
-        #     self.output.append("n_influenced", f"{n_influenced}/{len(surr_infills)}")
-        # else:
-        #     self.output.append("n_influenced", "-")
-        self.output.append("beta0", algorithm.beta0)
+        self.output.append("beta", f"{algorithm.beta0}/{algorithm.betal}")
         self.output.append("nds_score", algorithm.ndscore)
         # self.output.append("mae", algorithm.mae)
         self.output.append("n_front", len(opt))
-
 
 
 # =========================================================================================================
@@ -87,12 +80,15 @@ class ParDen(SurrogateAssistedAlgorithm):
 
     def __init__(self,
                  algorithm,
-                 twopoint0=True,
-                 nondominated_ranks=1,                 
+                 maxfill=True,
                  look_ahead=False,
                  surrogate=RandomForestRegressor(),
-                 n_max_infills=np.inf,    
-                 tol=0.0001,             
+                 n_max_infills=np.inf,
+                 terminator=MultiObjectiveSpaceToleranceTermination(tol=0.00001,
+                                                      n_last=1,
+                                                      nth_gen=1,
+                                                      n_max_gen=500,
+                                                      n_max_evals=None),
                  **kwargs):
         
         SurrogateAssistedAlgorithm.__init__(self, **kwargs)
@@ -100,8 +96,8 @@ class ParDen(SurrogateAssistedAlgorithm):
         self.proto = deepcopy(algorithm)
         self.algorithm = None
         self.look_ahead = look_ahead        
-        self.twopoint0 = twopoint0
-        self.ndrs = nondominated_ranks
+        self.twopoint0 = maxfill    
+        self.terminator =terminator            
 
         self.tol = tol
 
@@ -114,6 +110,7 @@ class ParDen(SurrogateAssistedAlgorithm):
         self.surrogate = surrogate
 
         self.beta0 = -1
+        self.betal = -1
         
 
     def _setup(self, problem, **kwargs):
@@ -134,39 +131,18 @@ class ParDen(SurrogateAssistedAlgorithm):
         # Doing a look ahead
         algorithm = deepcopy(self.algorithm)
         algorithm.problem = self.surrogateproblem
-        algorithm.termination = MultiObjectiveSpaceToleranceTermination(tol=self.tol,
-                                                      n_last=1,
-                                                      nth_gen=1,
-                                                      n_max_gen=None,
-                                                      n_max_evals=None)
+        algorithm.termination = self.terminator
 
-        if self.look_ahead:
-            # do beta loops
-            # fill the reservoir array
-            candidates = algorithm.infill()
-            k = len(candidates)
-            i = len(candidates)
-            self.beta0 = 0
-            while algorithm.has_next():
-                i += 1
-                algorithm.next()
-                j = np.random.randint(1,i)
-                if j <= k and np.random.randn() <= self.ndscore:                    
-                    opt_i = np.random.randint(0,len(algorithm.opt))
-                    opt_X = algorithm.opt[opt_i].get("X")                    
-                    candidates[j-1].set("X", opt_X)
-                    self.beta0 += 1
-        else:
-            # this would be the default behavior of the algorithm        
-            # Generate new candidates */        
-            # get the infill solutions
-            candidates = algorithm.infill()
-        
-        X_c = candidates.get("X")
-
-        # Estimate candidates’ fitness with surrogate */        
-        candidates.set("estimated", True)
+        # this would be the default behavior of the algorithm        
+        # Generate new candidates */        
+        # get the infill solutions
+        candidates = algorithm.infill()
         pop_size = candidates.shape[0]
+        res_size = int(pop_size*self.ndscore + 1)
+        
+        # Estimate candidates’ fitness with surrogate */
+        X_c = candidates.get("X")
+        candidates.set("estimated", True)
         Y_c = self.surrogate.predict(X_c)
 
         # Join candidates to non-dominated set */
@@ -176,19 +152,40 @@ class ParDen(SurrogateAssistedAlgorithm):
         # Pretenders are non-dominated candidates */
         # get positions of the non-dominated set in P_c
         fronts = self.nds_sorter.do(P_c, only_non_dominated_front=False)
-        nds = np.arange(0)
-        for front in fronts[:min(self.ndrs, len(fronts))]:            
-            if front.min() < pop_size:
-                #positions of non-dominated candidates only                
-                nds = np.append(nds, front[(front < pop_size)])
 
-        pretenders = candidates[np.r_[nds]]
-        candidates = self.algorithm.infill()        
-        if self.twopoint0:
+        nds = np.arange(0)
+        self.ndrs = len(fronts) if self.look_ahead else 1
+        for front in fronts[:self.ndrs]:
+            if front.min() < pop_size:
+                #positions of non-dominated candidates only
+                nds = np.append(nds, front[(front < pop_size)])        
+        pretenders = candidates[nds]
+
+        #Resevoir sampling on the reserved reservoir portion of the pretenders
+        if self.look_ahead:
+            pretenders = pretenders[:res_size]
+            # do beta loops
+            # fill the reservoir array
+            k = res_size
+            i = res_size
+            self.beta0 = 0            
+            while algorithm.has_next():
+                i += 1
+                algorithm.next()
+                j = np.random.randint(1,i)
+                if j <= k: 
+                    opt_i = np.random.randint(0,len(algorithm.opt))
+                    opt_X = algorithm.opt[opt_i].get("X")                    
+                    pretenders[j-1].set("X", opt_X)
+                    self.beta0 += 1
+            self.betal = i
+
+        candidates = self.algorithm.infill()
+        if self.twopoint0:            
             pretenders = Population.merge(pretenders, candidates[len(pretenders):])
         else:
-            # Acceptance sampling with NDScore as threshold to add additional pretenders */    
-            # get positions of the dominated candidates
+            #Acceptance sampling with NDScore as threshold to add additional pretenders */    
+            #get positions of the dominated candidates
             extra = np.arange(0, pop_size)
             extra = extra[~np.isin(extra, nds)]
             if len(extra) > 0:
@@ -245,19 +242,9 @@ class ParDen(SurrogateAssistedAlgorithm):
     def _set_optimum(self):        
         sols = self.pop
         if self.opt is not None:
-            sols = Population.merge(sols, self.opt)            
-            self.opt_old = self.opt
-        else:
-            self.opt_old = None
-        
+            sols = Population.merge(sols, self.opt)                    
         self.opt = filter_optimum(sols, least_infeasible=True)
-        
-        if self.opt_old is not None:
-            self.gd_old = self.gd if self.gd > 0 else self.gd_old
-            self.gd = GDPlus(normalize=False, pf=self.opt.get("F")).do(self.opt_old.get("F"))
-        else:
-            self.gd = 0.0
-            self.gd_old = 0.0            
+                  
         
             
         

@@ -19,7 +19,8 @@ class ParDenDisplay(MultiObjectiveDisplay):
         super()._do(problem, evaluator, algorithm)
         opt = algorithm.opt.get("F")
 
-        self.output.append("beta", f"{algorithm.beta0}/{algorithm.betal}")
+        # self.output.append("beta", f"{algorithm.beta0}/{algorithm.betal}/{algorithm.betag}")
+        self.output.append("beta", f"{algorithm.beta0}/{algorithm.betag}")
         self.output.append("nds_score", algorithm.ndscore)
         # self.output.append("mae", algorithm.mae)
         self.output.append("n_front", len(opt))
@@ -84,7 +85,7 @@ class ParDen(SurrogateAssistedAlgorithm):
                  look_ahead=False,
                  surrogate=RandomForestRegressor(),
                  n_max_infills=np.inf,
-                 terminator=MultiObjectiveSpaceToleranceTermination(tol=0.00001,
+                 terminator=MultiObjectiveSpaceToleranceTermination(tol=0.001,
                                                       n_last=1,
                                                       nth_gen=1,
                                                       n_max_gen=500,
@@ -109,6 +110,7 @@ class ParDen(SurrogateAssistedAlgorithm):
 
         self.beta0 = -1
         self.betal = -1
+        self.betag = -1
         
 
     def _setup(self, problem, **kwargs):
@@ -166,16 +168,23 @@ class ParDen(SurrogateAssistedAlgorithm):
             # fill the reservoir array
             k = res_size
             i = res_size
-            self.beta0 = 0            
+            self.beta0 = 0
+            self.betag = 0
             while algorithm.has_next():
-                i += 1
+                self.betag += 1
+                algorithm.opt.set("seen", True)
                 algorithm.next()
-                j = np.random.randint(1,i)
-                if j <= k: 
-                    opt_i = np.random.randint(0,len(algorithm.opt))
-                    opt_X = algorithm.opt[opt_i].get("X")                    
-                    pretenders[j-1].set("X", opt_X)
-                    self.beta0 += 1
+                not_seen = algorithm.opt[algorithm.opt.get("seen")==None]
+                # for opt_i in range(len(not_seen)):
+                i += 1
+                for opt_i in range(len(not_seen)):
+                # if len(not_seen) > 0:
+                    # opt_i = np.random.randint(0,len(not_seen))                    
+                    j = np.random.randint(1,i)
+                    if j <= k:
+                        opt_X = not_seen[opt_i].get("X")
+                        pretenders[j-1].set("X", opt_X)
+                        self.beta0 += 1
             self.betal = i
 
         candidates = self.algorithm.infill()

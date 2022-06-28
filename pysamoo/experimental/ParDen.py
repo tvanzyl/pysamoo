@@ -138,7 +138,7 @@ class ParDen(SurrogateAssistedAlgorithm):
         # get the infill solutions
         candidates = algorithm.infill()
         pop_size = candidates.shape[0]
-        res_size = int(pop_size*self.ndscore + 1)
+        res_size = np.int(np.ceil(pop_size*self.ndscore))
         
         # Estimate candidates’ fitness with surrogate */
         X_c = candidates.get("X")
@@ -151,7 +151,7 @@ class ParDen(SurrogateAssistedAlgorithm):
 
         # Pretenders are non-dominated candidates */
         # get positions of the non-dominated set in P_c
-        fronts = self.nds_sorter.do(P_c, only_non_dominated_front=False)
+        fronts = self.nds_sorter.do(P_c)
 
         nds = np.arange(0)
         self.ndrs = len(fronts) if self.look_ahead else 1
@@ -162,10 +162,11 @@ class ParDen(SurrogateAssistedAlgorithm):
         pretenders = candidates[nds]
 
         #Resevoir sampling on the reserved reservoir portion of the pretenders
-        if self.look_ahead:
+        if self.look_ahead:           
+            #set pretenders to reservoir size
             pretenders = pretenders[:res_size]
             # do beta loops
-            # fill the reservoir array
+            # fill the reservoir array            
             k = res_size
             i = res_size
             self.beta0 = 0

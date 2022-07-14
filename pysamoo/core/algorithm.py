@@ -60,6 +60,14 @@ class SurrogateAssistedAlgorithm(Algorithm):
 
         # initialize the default surrogate for the algorithm
         if self.surrogate is None:
+            try:
+                problem.n_ieq_constr                
+            except AttributeError:
+                problem.n_ieq_constr = 0
+            try:
+                problem.n_eq_constr                
+            except AttributeError:
+                problem.n_eq_constr = 0
 
             # the design space boundaries for the problem - used for normalization in the surrogate
             xl, xu = problem.bounds()

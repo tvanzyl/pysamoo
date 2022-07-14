@@ -1,7 +1,11 @@
 from collections import Counter
 
 import numpy as np
-from pymoo.constraints.tcv import TotalConstraintViolation
+try:
+    from pymoo.constraints.tcv import TotalConstraintViolation
+except:
+    from pysamoo.monkeypatch.tcv import TotalConstraintViolation
+
 from pymoo.core.population import Population
 from pymoo.core.replacement import ReplacementSurvival
 from pymoo.util.dominator import get_relation
@@ -122,5 +126,8 @@ def noisy(sols, error):
         out[type][:, k] += np.random.normal(loc=0.0, scale=std, size=len(sols))
 
     noisy = Population.new(**out)
-    TotalConstraintViolation().do(noisy, inplace=True)
+    if TotalConstraintViolation:
+        TotalConstraintViolation().do(noisy, inplace=True)
+    else:
+        set_cv(noisy)
     return noisy

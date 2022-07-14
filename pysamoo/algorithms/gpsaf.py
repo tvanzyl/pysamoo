@@ -19,6 +19,8 @@ from pymoo.util.termination.no_termination import NoTermination
 from pymoo.visualization.fitness_landscape import FitnessLandscape
 from pymoo.visualization.video.callback_video import AnimationCallback
 
+from pymoo.core.individual import Individual
+
 from pysamoo.core.algorithm import SurrogateAssistedAlgorithm
 # =========================================================================================================
 # Display
@@ -200,7 +202,7 @@ class GPSAF(SurrogateAssistedAlgorithm):
         error = self.surrogate.performance("mae")
 
         # this would be the default behavior of the algorithm
-        influenced = self.algorithm.infill()
+        influenced = self.algorithm.infill()        
 
         # do the alpha phase based on the tournament selection based on the surrogate prediction
         if self.alpha is not None:
@@ -272,8 +274,11 @@ class GPSAF(SurrogateAssistedAlgorithm):
 
         # now copy over the infills and set them to have never been evaluated
         ret = infills.copy(deep=True)
-        for e in ret:
-            e.reset(data=False)
+        for e in ret:         
+            try:
+                e.reset(data=False)
+            except:
+                Individual.__init__(e)
         ret.set("X", infills.get("X"), "created_by", infills)
 
         return ret
